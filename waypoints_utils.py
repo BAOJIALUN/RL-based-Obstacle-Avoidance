@@ -9,6 +9,12 @@ import carla
 import math
 import os
 import pandas as pd
+import csv
+import numpy as np
+
+
+
+            
 
 def save_waypoints(wpts, filename):
     '''
@@ -51,15 +57,35 @@ def load_waypoints(filename, map):
     # print(f"Path is loaded.\nlength:{len(waypoints)*0.1}\nnum_of_points:{len(waypoints)}")
     return waypoints
 
-def load_wp_curve(filename):
-    '''
-    return the coordinates of the waypoints and the coresponding curvature
-    '''
-    data = pd.read_csv(filename + '.csv')
-    wp=data[['smoothed_x', 'smoothed_y']].values.tolist()
-    curve=data['curvature'].values.tolist()
 
-    return np.array(wp), np.array(curve)
+def load_wp_curve(filename):
+        waypoints = []
+        curvatures = []    
+        with open(filename + '.csv', newline='') as csvfile:
+            reader = csv.DictReader(csvfile)
+            for idx, row in enumerate(reader):
+                try:
+                    x = float(row['smoothed_x'])
+                    y = float(row['smoothed_y'])
+                    c = float(row['curvature'])
+                    if np.isnan(x) or np.isnan(y) or np.isnan(c):
+                        raise ValueError("存在 NaN 值")
+                    waypoints.append([x, y])
+                    curvatures.append(c)
+                except Exception as e:
+                    print(f"[ERROR] 第 {idx} 行读取失败：{row}，错误信息：{e}")
+                    raise e  # 也可以继续 `continue` 以忽略该点    print(f"[DEBUG] load_wp_curve: 加载完成，共 {len(waypoints)} 个点")
+        return np.array(waypoints), np.array(curvatures)      
+
+# def load_wp_curve(filename):
+#     '''
+#     return the coordinates of the waypoints and the coresponding curvature
+#     '''
+#     data = pd.read_csv(filename + '.csv')
+#     wp=data[['smoothed_x', 'smoothed_y']].values.tolist()
+#     curve=data['curvature'].values.tolist()
+
+#     return np.array(wp), np.array(curve)
     
 
 def draw_waypoints(world, waypoints, z=0.1, lifetime=-1, string=False):

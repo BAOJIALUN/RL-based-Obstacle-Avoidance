@@ -9,6 +9,8 @@ from env import CarEnv
 from train import train_on_policy_agent
 import matplotlib.pyplot as plt
 import numpy as np
+import faulthandler
+faulthandler.enable()
 
 def save_return_log(return_list, filename):
     with open(filename, 'w', newline='') as csvfile:

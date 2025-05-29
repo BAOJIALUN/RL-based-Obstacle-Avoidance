@@ -57,61 +57,72 @@ class CarEnv():
     A-to-B Navication task environment with predefined path. 
     '''
     STEER_AMT = 0.3 # 转向最大值
-    def __init__(self, checkpoint_frequency=100, sync=False, continuous_action_space=True, render=True, train=True, 
-                 town='Town05', pathfile='town5_long_rod2', pid=None, pp=False, determined_speed=None):
+    def __init__(self, checkpoint_frequency=100, sync=False, continuous_action_space=True, render=True, train=True,
+                 town='Town05', pathfile='town5_long_r0d2', pid=None, pp=False, determined_speed=None):
         self.client = carla.Client(HOST, PORT)
         self.client.set_timeout(5.0)
         self.client.load_world(town)
         self.world = self.client.get_world()
-        self.world = self.client.load_world("Town05") 
         self.map = self.world.get_map()
-        self.blueprint_library = self.world.get_blueprint_library()
-        self.collision_list = []
-        self.actor_list = []
-        self.vehicle_bp = self.blueprint_library.filter("model3")[0]
-        self.im_width = IM_WIDTH # pygame窗口大小
-        self.im_height = IM_HEIGHT
-        self.timesteps = 0 # 记录与环境交互的步数
-        self.current_waypoint_index = 0
-        self.route_waypoints = None # 道路行点列表
-        self.continuous_action_space = continuous_action_space # 是否为连续动作空间的flag
+        self.blueprint_library = self.world.get_blueprint_library()        
+        self.render = render
+        self.sync = sync
+        self.train = train
+        self.continuous_action_space = continuous_action_space
         self.pathfile = pathfile
-        #=====里程计=====reset()函数中会再次初始化
-        self.kmh = 0 
-        self.max_kmh = 30 # 限速
-        self.target_kmh = 25
-        self.min_kmh = 15
-        self.max_acceleration = 4.0 #[version5-1]
-        #=====其余状态信息=====
-        self.max_distance_from_center = 0
-        self.angle = 0
-        self.state_dim = STATE_DIM
-        self.action_dim = ACTION_DIM
-        self.mean_curvature = 0 # [version3]平均曲率
-        #=====================
-        self.fresh_start = True
-        self.distance_from_center = None
-        self.original_setting = None
-        self.sync = sync # 同步模式flag
-        self.render = render # 渲染模式
-        self.train = train # 训练模式
-        self.pid_controller = pid if isinstance(pid, PIDController) else None # 使用PID控制运行
-        self.determined_speed = determined_speed if isinstance(determined_speed, PIDController) else None# 是否定速
-        self.pp = pp # 训练混合pp控制器
         self.checkpoint_frequency = checkpoint_frequency
+        self.pp = pp
+        self.pid_controller = pid if isinstance(pid, PIDController) else None
+        self.determined_speed = determined_speed if isinstance(determined_speed, PIDController) else None        
+        self.im_width = IM_WIDTH
+        self.im_height = IM_HEIGHT
+        self.state_dim = STATE_DIM
+        self.action_dim = ACTION_DIM        
+        self.actor_list = []
+        self.vehicle = None
+        self.static_obstacle = None        
+        self.timesteps = 0
+        self.current_waypoint_index = 0
+        self.route_waypoints = []
+        self.curvatures = []
+        self.kmh = 0.0
+        self.max_kmh = L_MAX_SPEED
+        self.target_kmh = L_TARGET_SPEED
+        self.min_kmh = L_MIN_SPEED
+        self.max_acceleration = 4.0
+        self.max_distance_from_center = MAX_DISTANCE_FROM_CENTER
+        self.angle = 0.0
+        self.mean_curvature = 0.0
+        self.next_curvature = 0.0
+        self.lookahead = 0.0
+        self.max_jerk = 2.0
+        self.fresh_start = True
+        self.distance_from_center = 0.0
+        self.center_lane_deviation = 0.0
+        self.control_mode = "pp"
+        self.d_obs = 100.0
+        self.phi_obs = 0.0
+        self.state = np.zeros(self.state_dim)
+        self.all_jerk = 0.0
+        self.all_rotation_diff = 0.0
         self.checkpoint_waypoint_index = 0
-        self.target_waypoint = None # 用于根据预瞄距离选取目标路点
-        self.original_setting = self.world.get_settings()
-        #========plot path======
-        self._path = list()
-        self._vpath = list()
-        self.info = dict()
-
-
-
+        self.target_waypoint = None
+        self._vpath = []
+        self.info = {}
+        self.rotation = 0.0
+        self.previous_location = None
+        self.acceleration = None
+        self.velocity = None
+        self.throttle = 0.0
+        self.previous_steer = 0.0
+        self.episode_start_time = None
+        self.reward = 0.0
+        self.collision_hist = []
+        self.current_waypoint = None        
+        
         if self.sync:
             settings = self.world.get_settings()
-            settings.fixed_delta_seconds = 0.05 #20FPS 50ms时间步长
+            settings.fixed_delta_seconds = 0.05
             settings.synchronous_mode = True
             self.world.apply_settings(settings)
             traffic_manager = self.client.get_trafficmanager()
@@ -119,16 +130,17 @@ class CarEnv():
         if not self.render:
             settings = self.world.get_settings()
             settings.no_rendering_mode = True
-            self.world.apply_settings(settings)
-
-        print(self.client.get_available_maps())
-
-
-    
+            self.world.apply_settings(settings)        
+            self.original_setting = self.world.get_settings()
+        print(self.client.get_available_maps())    
+        
+        
     def reset(self):
     # 创建所有 actor 和传感器
-        self.create_actors()    
-        # === 状态变量初始化 ===
+        print("[DEBUG] env.reset() called")
+        self.create_actors()        
+        
+    # === 状态变量初始化 ===
         self.timesteps = 0
         self.rotation = self.vehicle.get_transform().rotation.yaw
         self.previous_location = self.vehicle.get_location()
@@ -142,42 +154,60 @@ class CarEnv():
         self.center_lane_deviation = 0.0
         self.lookahead = 0
         self.control_mode = "pp"
-        self.episode_start_time = time.time()    
+        self.episode_start_time = time.time()
         self.d_obs = 100.0
         self.phi_obs = 0.0
-        self.state = np.array([0, 0, 0, 0, 0, self.d_obs, self.phi_obs])    
+        self.state = np.array([0, 0, 0, 0, 0, self.d_obs, self.phi_obs])
         self.all_jerk = 0
-        self.all_rotation_diff = 0    
+        self.all_rotation_diff = 0        
         self.max_kmh = L_MAX_SPEED
         self.target_kmh = L_TARGET_SPEED
         self.min_kmh = L_MIN_SPEED
         self.max_distance_from_center = MAX_DISTANCE_FROM_CENTER
         self.max_acceleration = 4.0
-        self.max_jerk = 2.0    
-        self.checkpoint_waypoint_index = 0   
-        self.goal_y = 37
-        self.last_y = self.vehicle.get_location().y
+        self.max_jerk = 2.0        
+        self.checkpoint_waypoint_index = 0
+        self.goal_y = 37        
         
-         # === 路点加载与位置设置 ===
+        
+        print("[DEBUG] 状态初始化完成")
+
+        # === 路点加载与位置设置 ===
         if self.fresh_start or not hasattr(self, "route_waypoints") or not self.route_waypoints:
+            print("[DEBUG] 加载路径")
+            print("[DEBUG] 即将执行 load_wp_curve")
             self.route_waypoints, self.curvatures = load_wp_curve(self.pathfile)
-            draw_waypoints(self.world, self.route_waypoints, z=0, lifetime=20)
+            print("[DEBUG] load_wp_curve 执行完成")
+            # draw_waypoints(self.world, self.route_waypoints, z=0, lifetime=20)
             self.current_waypoint_index = 0
             waypoint = self.route_waypoints[0]
-            car_location = carla.Location(x=waypoint[0], y=waypoint[1], z=0)
-            car_transform = self.map.get_waypoint(car_location).transform
+            car_location = carla.Location(x=waypoint[0], y=waypoint[1], z=0)    
+            map_wp = self.map.get_waypoint(car_location, project_to_road=True, lane_type=carla.LaneType.Driving)
+            if map_wp is None:
+                print("[FATAL] 无法获取 car_location 对应的车道点，位置为：", car_location)
+                raise RuntimeError("无效的车辆初始位置")    
+            car_transform = map_wp.transform
             self.vehicle.set_transform(car_transform)
+            print("[DEBUG] 设置车辆位置成功")
         else:
             waypoint = self.route_waypoints[self.checkpoint_waypoint_index]
-            car_location = carla.Location(x=waypoint[0], y=waypoint[1], z=0)
-            car_transform = self.map.get_waypoint(car_location).transform
+            car_location = carla.Location(x=waypoint[0], y=waypoint[1], z=0)    
+            map_wp = self.map.get_waypoint(car_location, project_to_road=True, lane_type=carla.LaneType.Driving)
+            if map_wp is None:
+                print("[FATAL] 无法获取 checkpoint 对应的车道点，位置为：", car_location)
+                raise RuntimeError("无效的 checkpoint 位置")    
+            car_transform = map_wp.transform
             self.vehicle.set_transform(car_transform)
-            self.current_waypoint_index = self.checkpoint_waypoint_index   
-            # 控制初始化
+            self.current_waypoint_index = self.checkpoint_waypoint_index
+            print("[DEBUG] 设置车辆位置成功（从 checkpoint）")
             self.vehicle.apply_control(carla.VehicleControl(throttle=0.0, brake=0.0, steer=0.0))
-            time.sleep(1)    
-            return self.state, {}
 
+
+        print("[DEBUG] 车辆位置设置完成")
+        time.sleep(1)  
+        print("[DEBUG] 返回状态:{self.state}")
+        print("[DEBUG] reset() 完成，返回状态")
+        return self.state, {}
 
     # def reset(self):
     #     # try:
@@ -325,117 +355,98 @@ class CarEnv():
 
     
     #与环境交互的函数
+
     def step(self, action):
-        #try:
+        try:
+            print(f"[DEBUG] Step started. sync={self.sync}")
+            assert self.world is not None, "[ASSERT FAILED] self.world is None"
             if self.sync:
-                self.world.tick() # 同步模式下使carla运行一个步长
-            # 设置监视器俯视
+                self.world.tick()
+            print("[DEBUG] World ticked.")        
+            
+            # 设置摄像头视角
             spectator = self.world.get_spectator()
-            spectator_transform = self.vehicle.get_transform()
-            spectator.set_transform(carla.Transform(spectator_transform.location + carla.Location(z=20),
-                                                    carla.Rotation(pitch=-90)))
+            transform = self.vehicle.get_transform()
+            spectator.set_transform(carla.Transform(transform.location + carla.Location(z=25), carla.Rotation(pitch=-90)))
+            print("[DEBUG] Spectator view updated.")        
             self.fresh_start = False
             self.timesteps += 1
-
-            # 当前时间步奖励置零
             self.max_dist = 8.0
-            self.reward = 0
+            self.reward = 0.0
             done = False
-            truncated = False
-        # === 控制模式判断 ===
+            truncated = False        
+            
+            # 控制策略判断
             obs_distance, obs_location = self.get_nearest_obstacle_info()
             if obs_distance < 8.0 and self.is_obstacle_in_front(self.vehicle.get_transform(), obs_location):
-               self.control_mode = "rl"
+                self.control_mode = "rl"
             else:
-               self.control_mode = "pp"
-        
-         # === 控制执行 ===
-            # if self.control_mode == "pp":
-            #     transform = self.vehicle.get_transform()
-            #     steer = self.pure_pursuit(self.target_waypoint, transform)
-            #     throttle = self.determined_speed.update(self.kmh)
-
-            #     self.vehicle.apply_control(carla.VehicleControl(
-            #         throttle=throttle if throttle >= 0 else 0.0,
-            #         steer=steer,
-            #         brake=0.0 if throttle >= 0 else -throttle
-            #     ))
+                self.control_mode = "pp"
+            print(f"[DEBUG] Control mode: {self.control_mode}")        
+            
+            # 控制执行
             if self.control_mode == "pp":
-                transform = self.vehicle.get_transform()    # 当前车辆位置
+                transform = self.vehicle.get_transform()
                 location = self.vehicle.get_location()
-                vehicle_location = np.array([location.x, location.y])    # 固定前视距离
-                fixed_lookahead = 2.0 
-                self.target_waypoint = find_lookahead_waypoint(vehicle_location, self.current_waypoint_index, fixed_lookahead, self.route_waypoints)    # 纯跟踪转向角
-                steer = self.pure_pursuit(self.target_waypoint, transform)    # 油门使用定速控制器
-                if self.determined_speed:
-                    throttle = self.determined_speed.update(self.kmh)    
-                else:
-                    throttle = 0.3
-
+                vehicle_location = np.array([location.x, location.y])
+                fixed_lookahead = 2.0
+                self.target_waypoint = find_lookahead_waypoint(vehicle_location, self.current_waypoint_index, fixed_lookahead, self.route_waypoints)
+                steer = self.pure_pursuit(self.target_waypoint, transform)
+                throttle = self.determined_speed.update(self.kmh) if self.determined_speed else 0.3
+            else:
+                throttle = float(action[0])
+                steer = float(action[1])        
                 self.vehicle.apply_control(carla.VehicleControl(
                 throttle=throttle if throttle >= 0 else 0.0,
                 steer=steer,
                 brake=0.0 if throttle >= 0 else -throttle
-    ))
-            else:
-                throttle = float(action[0])
-                steer = float(action[1])
-
-            self.vehicle.apply_control(carla.VehicleControl(
-                throttle=throttle if throttle >= 0 else 0.0,
-                steer=steer,
-                brake=0.0 if throttle >= 0 else -throttle
             ))
-
-
-         # === 奖励计算 ===
+            print(f"[DEBUG] Control applied: throttle={throttle:.2f}, steer={steer:.2f}")        
+            
+            # Carla 同步数据采集
+            print("[DEBUG] Before CarlaSyncMode.tick()")
             snapshot, lane, collision = self.synch_mode.tick(timeout=10.0)
-
+            print("[DEBUG] After CarlaSyncMode.tick()")        
+            
+            # 奖励相关计算
             cos_yaw_diff, dist, col_flag, lane_flag, traveled = self.get_reward_comp(
-            self.vehicle, self.spawn_point, collision, lane
-    )
-
+                self.vehicle, self.spawn_waypoint, collision, lane
+            )
             self.reward = self.reward_value(cos_yaw_diff, dist, col_flag, lane_flag, traveled)
-            self.episode_reward += self.reward
-
-        # === Done 判定 ===
+            self.episode_reward += self.reward        
+            
+            # 判断结束条件
             if col_flag == 1:
                 done = True
-            print("Episode ended by collision")
-
+                print("[DEBUG] Episode ended by collision.")        
+            
             if lane_flag == 1:
                 done = True
-            self.reward -= 50
-            print("Episode ended by lane invasion")
-
+                self.reward -= 50
+                print("[DEBUG] Episode ended by lane invasion.")        
+            
             if dist > self.max_dist:
                 done = True
-            self.reward -= 50
-            print(f"Episode ended due to excessive distance from path: {dist:.2f}")
-
-            current_y = self.vehicle.get_location().y
-
+                self.reward -= 50
+                print(f"[DEBUG] Episode ended: distance too large: {dist:.2f}")        
+                current_y = self.vehicle.get_location().y
             if current_y > self.goal_y:
                 self.reward += 50
-            done = True
-            print("Episode ended by reaching goal position")
-
-            self.velocity = self.vehicle.get_velocity()
-            current_speed = math.sqrt(
-            self.velocity.x**2 + self.velocity.y**2 + self.velocity.z**2
-        )
-  
+                done = True
+                print("[DEBUG] Episode ended by reaching goal.")        
+                self.velocity = self.vehicle.get_velocity()
+            current_speed = math.sqrt(self.velocity.x**2 + self.velocity.y**2 + self.velocity.z**2)
             if current_speed < 0.1:
                 done = True
-            print("Episode ended by stopping too long")
-
+                print("[DEBUG] Episode ended by stopping too long.")        
+                
             if self.timesteps > 1000:
                 done = True
-            truncated = True
-            print("Episode truncated by time step limit")
-
-
-
+                truncated = True
+                print("[DEBUG] Episode truncated by time limit.")        
+                
+                # 状态更新
+            obs = self.get_observation()
             self.info = {
                 "reward": self.reward,
                 "speed": self.kmh,
@@ -446,10 +457,15 @@ class CarEnv():
                 "collision": col_flag,
                 "lane": lane_flag,
                 "timesteps": self.timesteps
-            }
-            
-            obs = self.get_observation()
-            return obs, self.reward, done, truncated, self.info
+            }        
+            return obs, self.reward, done, truncated, self.info    
+        
+        except Exception as e:
+            print(f"[ERROR] Exception in step(): {e}")
+            return self.state, -100.0, True, True, {"error": str(e)}
+        
+
+    
         
 
 
@@ -685,18 +701,21 @@ class CarEnv():
 
     def create_actors(self):
         self.actor_list = []
-        self.blueprint_library = self.world.get_blueprint_library()
-        self.vehicle_blueprint = self.blueprint_library.filter('*vehicle*')    
+        self.blueprint_library = self.world.get_blueprint_library()    
+        self.vehicle_blueprint = self.blueprint_library.filter('*vehicle*')
+        self.vehicle_bp = self.blueprint_library.filter("vehicle.tesla.model3")[0]  
         # === 主车 ===
         spawn_point = random.choice(self.map.get_spawn_points())
         self.spawn_waypoint = self.map.get_waypoint(spawn_point.location)
         spawn_transform = self.spawn_waypoint.transform
-        spawn_transform.location.z = 1.0
-
+        spawn_transform.location.z = 1.0    
         self.vehicle = self.world.try_spawn_actor(self.vehicle_bp, spawn_transform)
-        self.actor_list.append(self.vehicle)
-        
-        # 位置灯
+        print("[DEBUG] Vehicle spawned:", self.vehicle)
+        if self.vehicle is None:
+            print("[ERROR] Vehicle spawn failed! Check spawn point or map state.")
+            return
+        self.actor_list.append(self.vehicle)    
+        # === 位置灯 ===
         self.vehicle.set_light_state(carla.VehicleLightState(carla.VehicleLightState.Position))    
         # === 相机 ===
         self.rgb_cam = self.blueprint_library.find('sensor.camera.rgb')
@@ -705,40 +724,42 @@ class CarEnv():
         self.rgb_cam.set_attribute("fov", "110")
         cam_transform = carla.Transform(carla.Location(x=2, z=1))
         self.camera_rgb = self.world.spawn_actor(self.rgb_cam, cam_transform, attach_to=self.vehicle)
+        print("[DEBUG] RGB camera attached:", self.camera_rgb)
         self.actor_list.append(self.camera_rgb)    
         # === 车道偏离传感器 ===
         self.lane_invasion = self.world.spawn_actor(
-        self.blueprint_library.find('sensor.other.lane_invasion'),
-        carla.Transform(), attach_to=self.vehicle)
+            self.blueprint_library.find('sensor.other.lane_invasion'),
+            carla.Transform(), attach_to=self.vehicle)
         self.actor_list.append(self.lane_invasion)    
-        
         # === 碰撞传感器 ===
         self.collision_sensor = self.world.spawn_actor(
-        self.blueprint_library.find('sensor.other.collision'),
-        carla.Transform(), attach_to=self.vehicle)
+            self.blueprint_library.find('sensor.other.collision'),
+            carla.Transform(), attach_to=self.vehicle)
         self.actor_list.append(self.collision_sensor)
         self.collision_sensor.listen(lambda event: self.collision_data(event))    
-        
         # === 静态障碍物 ===
         obstacle_transform = carla.Transform(
             carla.Location(x=31.5, y=38.5, z=0.1),
             carla.Rotation(yaw=270)
         )
         self.static_obstacle = self.world.try_spawn_actor(self.vehicle_blueprint.filter('model3')[0], obstacle_transform)
+        print("[DEBUG] Static obstacle:", self.static_obstacle)
         if self.static_obstacle:
             self.static_obstacle.set_simulate_physics(False)
             self.actor_list.append(self.static_obstacle)    
-        
-        # === Spectator视角 ===
+            # === Spectator视角 ===
         spectator = self.world.get_spectator()
         transform = self.vehicle.get_transform()
         spectator.set_transform(carla.Transform(transform.location + carla.Location(z=25), carla.Rotation(pitch=-90)))    
         # === Carla同步模式包装器 ===
         self.synch_mode = CarlaSyncMode(self.world, self.camera_rgb, self.lane_invasion, self.collision_sensor)    
+        
         # === 控制器初始化 ===
         self.control_count = 0
         if self.control_mode == "PID":
-           self.controller = PIDController.Controller()
+            self.controller = PIDController.Controller()
+
+
 
 
 
@@ -787,8 +808,8 @@ class CarEnv():
     def time_to_collison(self):
 
          # EGO information
-        velocity_vec = self.player.get_velocity()
-        current_transform = self.player.get_transform()
+        velocity_vec = self.vehicle.get_velocity()
+        current_transform = self.vehicle.get_transform()
         current_location = current_transform.location
         current_x = current_location.x
         current_y = current_location.y
@@ -796,8 +817,8 @@ class CarEnv():
        
 
         #Parked vehicle information
-        parked_transform = self.parked_vehicle.get_transform()
-        velocity_parked = self.parked_vehicle.get_velocity()
+        parked_transform = self.static_obstacle.get_transform()
+        velocity_parked = self.static_obstacle.get_velocity()
         parked_location = parked_transform.location
         parked_x = parked_location.x
         parked_y = parked_location.y
@@ -816,9 +837,9 @@ class CarEnv():
         if not self._autopilot_enabled:
             # Control loop
             # get waypoints
-            current_location = self.player.get_location()
-            velocity_vec = self.player.get_velocity()
-            current_transform = self.player.get_transform()
+            current_location = self.vehicle.get_location()
+            velocity_vec = self.vehicle.get_velocity()
+            current_transform = self.vehicle.get_transform()
             current_location = current_transform.location
             current_rotation = current_transform.rotation
             current_x = current_location.x
@@ -831,7 +852,7 @@ class CarEnv():
             
             if ready_to_go:
                 if self.control_mode == "PID":
-                    current_location = self.player.get_location()
+                    current_location = self.vehicle.get_location()
                     current_waypoint = self.map.get_waypoint(current_location).next(self.waypoint_resolution)[0]
                     # print(current_waypoint.transform.location.x-current_x)
                     # print(current_waypoint.transform.location.y-current_y)            
@@ -854,7 +875,7 @@ class CarEnv():
                 self.controller.update_controls()
                 self._control.throttle, self._control.steer, self._control.brake = self.controller.get_commands()
                 # print(self._control)
-                self.player.apply_control(self._control)
+                self.vehicle.apply_control(self._control)
                 self.control_count += 1
 
     
@@ -877,7 +898,7 @@ class CarEnv():
 
         print(self._control)    
 
-        self.player.apply_control(self._control)
+        self.vehicle.apply_control(self._control)
         self.control_count += 1
 
 
@@ -898,8 +919,8 @@ class CarEnv():
     def get_observation(self):
 
          # EGO information
-        velocity_vec = self.player.get_velocity()
-        current_transform = self.player.get_transform()
+        velocity_vec = self.vehicle.get_velocity()
+        current_transform = self.vehicle.get_transform()
         current_location = current_transform.location
         current_roration = current_transform.rotation
         current_x = current_location.x
@@ -910,7 +931,7 @@ class CarEnv():
         current_steer = self.steer
 
 
-        acceleration_vec =  self.player.get_acceleration()
+        acceleration_vec =  self.vehicle.get_acceleration()
         current_acceleration = math.sqrt(acceleration_vec.x**2 + acceleration_vec.y**2 + acceleration_vec.z**2)
         sideslip = np.tanh(velocity_vec.x/np.abs(velocity_vec.y+0.1))
 
@@ -927,14 +948,19 @@ class CarEnv():
         rotation = transform.rotation    
         current_speed = math.sqrt(velocity_vec.x**2 + velocity_vec.y**2 + velocity_vec.z**2)
         acceleration_vec = self.vehicle.get_acceleration()
-        current_acceleration = math.sqrt(acceleration_vec.x**2 + acceleration_vec.y**2 + acceleration_vec.z**2)    # 标准化部分
+        current_acceleration = math.sqrt(acceleration_vec.x**2 + acceleration_vec.y**2 + acceleration_vec.z**2)    
+        # 标准化部分
         norm_speed = current_speed / self.target_kmh if self.target_kmh > 0 else 0.0
         norm_accel = current_acceleration / self.max_acceleration if self.max_acceleration > 0 else 0.0
         norm_dist = self.distance_from_center / self.max_distance_from_center if self.max_distance_from_center > 0 else 0.0
-        norm_angle = self.angle / np.deg2rad(20)  # 以20度为参考角度进行归一化
-        norm_curve = self.mean_curvature  # 可选择是否标准化
-        norm_d_obs = min(self.d_obs, 30.0) / 30.0  # 最远视距30m内归一化
-        norm_phi_obs = self.phi_obs / 180.0  # 角度归一化（-180~180）    
+        norm_angle = self.angle / np.deg2rad(20)  
+        # 以20度为参考角度进行归一化
+        norm_curve = self.mean_curvature  
+        # 可选择是否标准化
+        norm_d_obs = min(self.d_obs, 30.0) / 30.0  
+        # 最远视距30m内归一化
+        norm_phi_obs = self.phi_obs / 180.0  
+        # 角度归一化（-180~180）    
         # 构造状态向量
         self.state = np.array([
             norm_curve,        # 前方曲率
