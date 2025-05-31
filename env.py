@@ -173,7 +173,7 @@ class CarEnv():
         print("[DEBUG] 状态初始化完成")
 
         # === 路点加载与位置设置 ===
-        if self.fresh_start or not hasattr(self, "route_waypoints") or not self.route_waypoints:
+        if self.fresh_start or not self.route_waypoints:
             print("[DEBUG] 加载路径")
             print("[DEBUG] 即将执行 load_wp_curve")
             #self.route_waypoints, self.curvatures = load_wp_curve(self.pathfile)
@@ -206,7 +206,8 @@ class CarEnv():
             self.vehicle.set_transform(car_transform)
             self.current_waypoint_index = self.checkpoint_waypoint_index
             print("[DEBUG] 设置车辆位置成功（从 checkpoint）")
-            self.vehicle.apply_control(carla.VehicleControl(throttle=0.0, brake=0.0, steer=0.0))
+
+        self.vehicle.apply_control(carla.VehicleControl(throttle=0.0, brake=0.0, steer=0.0))
 
 
         print("[DEBUG] 车辆位置设置完成")
