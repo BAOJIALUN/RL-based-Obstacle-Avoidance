@@ -74,7 +74,8 @@ def load_wp_curve(filename):
                     curvatures.append(c)
                 except Exception as e:
                     print(f"[ERROR] 第 {idx} 行读取失败：{row}，错误信息：{e}")
-                    raise e  # 也可以继续 `continue` 以忽略该点    print(f"[DEBUG] load_wp_curve: 加载完成，共 {len(waypoints)} 个点")
+                    raise e  # 也可以继续 `continue` 以忽略该点    
+                #print(f"[DEBUG] load_wp_curve: 加载完成，共 {len(waypoints)} 个点")
         return np.array(waypoints), np.array(curvatures)      
 
 # def load_wp_curve(filename):

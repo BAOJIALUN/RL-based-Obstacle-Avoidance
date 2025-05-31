@@ -176,8 +176,14 @@ class CarEnv():
         if self.fresh_start or not hasattr(self, "route_waypoints") or not self.route_waypoints:
             print("[DEBUG] 加载路径")
             print("[DEBUG] 即将执行 load_wp_curve")
-            self.route_waypoints, self.curvatures = load_wp_curve(self.pathfile)
-            print("[DEBUG] load_wp_curve 执行完成")
+            #self.route_waypoints, self.curvatures = load_wp_curve(self.pathfile)
+            start_x, start_y = self.vehicle.get_location().x, self.vehicle.get_location().y
+            for i in range(100): # 生成100个路径点
+                x = start_x + i * 1.0 # 每个点间隔 1 米
+                y = start_y      # 不变，生成直线
+                self.route_waypoints.append([x, y])
+                self.curvatures.append(0.0) # 直线的曲率为 0print(f"[DEBUG] 自动生成了 {len(self.route_waypoints)} 个路径点")
+            #print("[DEBUG] load_wp_curve 执行完成",flush=True)
             # draw_waypoints(self.world, self.route_waypoints, z=0, lifetime=20)
             self.current_waypoint_index = 0
             waypoint = self.route_waypoints[0]
