@@ -8,14 +8,14 @@ import os
 
 print(os.getcwd())
 # Load the content of the provided pickle file to inspect it
-file_path = 'town5_waypoints_long_r0d2.pkl'
+file_path = 'town3_waypoints_turn_right_1.pkl'
 
 with open(file_path, 'rb') as f:
     data = pickle.load(f)
 
 
 # Define the path to save the CSV file
-csv_file_path = 'town5_waypoints_long_r0d2.csv'
+csv_file_path = 'town3_waypoints_turn_right_1.csv'
 
 # Extract location_x and location_y from the list of dictionaries
 coordinates = [(item['location_x'], item['location_y']) for item in data]
@@ -28,7 +28,7 @@ with open(csv_file_path, 'w', newline='') as csvfile:
 
 
 # Load the CSV file with the waypoints
-csv_file_path = 'town5_waypoints_long_r0d2.csv'
+csv_file_path = 'town3_waypoints_turn_right_1.csv'
 waypoints = pd.read_csv(csv_file_path)
 
 # Extract location_x and location_y
@@ -72,7 +72,7 @@ smoothed_data = pd.DataFrame({
 })
 
 # Define the path to save the smoothed data as a CSV file
-smoothed_csv_file_path = 'town5_long_r0d2.csv'
+smoothed_csv_file_path = 'town4_long_r0d2.csv'
 
 # Save the smoothed data to a CSV file
 smoothed_data.to_csv(smoothed_csv_file_path, index=False)

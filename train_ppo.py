@@ -66,7 +66,11 @@ try:
     producer_thread = threading.Thread(target=train_on_policy_agent, args=(env, agent, num_episodes, args, data_queue))
     producer_thread.start()
     visualizer.start()
-    return_list = data_queue['return_list']
+    producer_thread.join()
+
+    # 获取返回数据
+    return_list = data_queue.get() 
+    #return_list = data_queue['return_list']
     if args['save']:
         save_return_log(return_list, args['save'])
 

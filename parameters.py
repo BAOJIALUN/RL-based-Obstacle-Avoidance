@@ -28,10 +28,10 @@ PORT = 2000
 IM_WIDTH = 640
 IM_HEIGHT = 480
 MAX_DISTANCE_FROM_CENTER = 3
-STATE_DIM = 7
+STATE_DIM = 6
 ACTION_DIM = 2
 TOWN = 'Town05'
-PATHFILE = 'town5_long_r0d2'
+PATHFILE = 'town5_waypoints'
 # TOWN = 'Town03'
 # PATHFILE = 'town3_long2_r0d2'
 

@@ -4,7 +4,7 @@ from parameters import *
 import torch
 import csv
 import os
-from PPO_obstacle import PPOContinuous
+from PPO import PPOContinuous
 from env import CarEnv
 from train import train_on_policy_agent
 import matplotlib.pyplot as plt

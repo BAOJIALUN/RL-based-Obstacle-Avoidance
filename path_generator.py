@@ -14,13 +14,13 @@ blueprint = world.get_blueprint_library()
 wmap = world.get_map()
 spawn_points = wmap.get_spawn_points()
 
-origin = spawn_points[72]
-destination = spawn_points[85]
+origin = spawn_points[110]
+destination = spawn_points[127]
 rwp = compute_route_waypoints(wmap, origin, destination, resolution=0.2)
 for each in rwp:
     route_waypoints.append(each[0])
 draw_waypoints(world, route_waypoints, lifetime=50)
-save_waypoints(route_waypoints, "town5_waypoints_long_r0d2.pkl")
+save_waypoints(route_waypoints, "town4_waypoints_long_r0d2.pkl")
 # vehicle_bp = blueprint.filter("model3")[0]
 # for _ in range(1):
 #     spawn_point = spawn_points[88]

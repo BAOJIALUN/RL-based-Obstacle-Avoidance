@@ -25,7 +25,7 @@ def train_off_policy_agent(env, agent, num_episodes, replay_buffer, minimal_size
     best_episode = 0
     # 10轮
     for i in range(10):
-        with tqdm(total=int(num_episodes/10), desc='Iteration %d' % i) as pbar:
+        #with tqdm(total=int(num_episodes/10), desc='Iteration %d' % i) as pbar:
             # 每轮num/10个episode
             for i_episode in range(int(num_episodes/10)):
                 episode_return = 0
@@ -59,74 +59,13 @@ def train_off_policy_agent(env, agent, num_episodes, replay_buffer, minimal_size
                         torch.save(agent.actor.state_dict(), os.path.join(save_dir, f"{args['save']}_{best_episode}_actor.pt"))
                         torch.save(agent.critic_1.state_dict(), os.path.join(save_dir, f"{args['save']}_{best_episode}_critic1.pt"))
                         torch.save(agent.critic_2.state_dict(), os.path.join(save_dir, f"{args['save']}_{best_episode}_critic2.pt"))
-                if (i_episode+1) % 10 == 0:
-                    pbar.set_postfix({'episode': '%d' % (num_episodes/10 * i + i_episode+1), 'return': '%.3f' % np.mean(return_list[-10:])})
-                pbar.update(1)
+                #if (i_episode+1) % 10 == 0:
+                 ##pbar.update(1)S
     if args['save']:
         torch.save(agent.actor.state_dict(), os.path.join(save_dir, f"{args['save']}_{num_episodes}_actor.pt"))
         torch.save(agent.critic_1.state_dict(), os.path.join(save_dir, f"{args['save']}_{best_episode}_critic1.pt"))
         torch.save(agent.critic_2.state_dict(), os.path.join(save_dir, f"{args['save']}_{best_episode}_critic2.pt"))
     queue.put({"return_list": return_list})
-
-"""
-def train_on_policy_agent(env, agent, num_episodes, args, queue):
-    return_list = []
-    best_retrun = -np.inf
-    best_episode = 0
-    for i in range(10):
-        with tqdm(total=int(num_episodes/10), desc='Iteration %d' % i) as pbar:
-            for i_episode in range(int(num_episodes/10)):
-                episode_return = 0
-                transition_dict = {'states': [], 'actions': [], 'next_states': [], 'rewards': [], 'dones': []}
-                state, tracking_path = env.reset()
-                done = False
-                while not done:
-                    action = agent.take_action(state)
-                    next_state, reward, done, info = env.step(action)
-                    transition_dict['states'].append(state)
-                    transition_dict['actions'].append(action)
-                    transition_dict['next_states'].append(next_state)
-                    transition_dict['rewards'].append(reward)
-                    transition_dict['dones'].append(done)
-                    state = next_state
-                    episode_return += reward
-                    new_data = {
-                        # "reward": info["reward"],
-                        # "speed":info["speed"],
-                        # "lookahead":info["lookahead"],
-                        # "throttle":info["throttle"],
-                        # "deviation":info["deviation"]
-                        "reward": info.get("reward", 0),
-                        "speed": info.get("speed", 0),
-                        "throttle": info.get("throttle", 0),
-                        "steer": info.get("steer", 0),
-                        "angle": info.get("angle", 0),
-                        "deviation": info.get("distance_from_center", 0),
-                        "collision": info.get("collision", 0),
-                        "lane": info.get("lane", 0),
-                        "timesteps": info.get("timesteps", 0)
-                    }
-                    queue.put(new_data)
-
-                return_list.append(episode_return)
-                queue.put({"reset":True})
-                print(f"Epsiode reward:{int(episode_return)}\n time:{info['timesteps']}\n lat_jerk:{info['lat_accel']}\n cover:{info['path_covered']}" )
-                agent.update(transition_dict)
-                if episode_return > best_retrun:
-                    best_retrun = episode_return
-                    best_episode = i * int(num_episodes/10) + i_episode + 1
-                    if args['save']:
-                        torch.save(agent.actor.state_dict(), os.path.join(save_dir, f"{args['save']}_{best_episode}_actor.pt"))
-                        torch.save(agent.critic.state_dict(), os.path.join(save_dir, f"{args['save']}_{best_episode}_critic.pt"))
-                if (i_episode+1) % 10 == 0:
-                    pbar.set_postfix({'episode': '%d' % (num_episodes/10 * i + i_episode+1), 'return': '%.3f' % np.mean(return_list[-10:])})
-                pbar.update(1)
-    if args['save']:
-        torch.save(agent.actor.state_dict(), os.path.join(save_dir, f"{args['save']}_{num_episodes}_actor.pt"))
-        torch.save(agent.critic.state_dict(), os.path.join(save_dir, f"{args['save']}_{best_episode}_critic.pt"))
-    save_return_log(return_list)
-    queue.put({"return_list": return_list})
-"""
 
 def train_on_policy_agent(env, agent, num_episodes, args, queue=None):
     return_list = []
@@ -194,6 +133,54 @@ def train_on_policy_agent(env, agent, num_episodes, args, queue=None):
 
     return return_list
 
+# def train_on_policy_agent(env, agent, num_episodes, args, queue):
+#     return_list = []
+#     best_retrun = -np.inf
+#     best_episode = 0
+#     for i in range(10):
+#         with tqdm(total=int(num_episodes/10), desc='Iteration %d' % i) as pbar:
+#             for i_episode in range(int(num_episodes/10)):
+#                 episode_return = 0
+#                 transition_dict = {'states': [], 'actions': [], 'next_states': [], 'rewards': [], 'dones': []}
+#                 state, tracking_path = env.reset()
+#                 done = False
+#                 while not done:
+#                     action = agent.take_action(state)
+#                     next_state, reward, done, info = env.step(action)
+#                     transition_dict['states'].append(state)
+#                     transition_dict['actions'].append(action)
+#                     transition_dict['next_states'].append(next_state)
+#                     transition_dict['rewards'].append(reward)
+#                     transition_dict['dones'].append(done)
+#                     state = next_state
+#                     episode_return += reward
+#                     new_data = {
+#                         "reward": info["reward"],
+#                         "speed":info["speed"],
+#                         "lookahead":info["lookahead"],
+#                         "throttle":info["throttle"],
+#                         "deviation":info["deviation"]
+#                     }
+#                     queue.put(new_data)
+
+#                 return_list.append(episode_return)
+#                 queue.put({"reset":True})
+#                 print(f"Epsiode reward:{int(episode_return)}\n time:{info['timesteps']}\n lat_jerk:{info['lat_accel']}\n cover:{info['path_covered']}" )
+#                 agent.update(transition_dict)
+#                 if episode_return > best_retrun:
+#                     best_retrun = episode_return
+#                     best_episode = i * int(num_episodes/10) + i_episode + 1
+#                     if args['save']:
+#                         torch.save(agent.actor.state_dict(), os.path.join(save_dir, f"{args['save']}_{best_episode}_actor.pt"))
+#                         torch.save(agent.critic.state_dict(), os.path.join(save_dir, f"{args['save']}_{best_episode}_critic.pt"))
+#                 if (i_episode+1) % 10 == 0:
+#                     pbar.set_postfix({'episode': '%d' % (num_episodes/10 * i + i_episode+1), 'return': '%.3f' % np.mean(return_list[-10:])})
+#                 pbar.update(1)
+#     if args['save']:
+#         torch.save(agent.actor.state_dict(), os.path.join(save_dir, f"{args['save']}_{num_episodes}_actor.pt"))
+#         torch.save(agent.critic.state_dict(), os.path.join(save_dir, f"{args['save']}_{best_episode}_critic.pt"))
+#     save_return_log(return_list)
+#     queue.put({"return_list": return_list})
 
 
 def save_return_log(return_list, filename):
