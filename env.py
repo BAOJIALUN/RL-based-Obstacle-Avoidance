@@ -294,7 +294,7 @@ class CarEnv():
 
             # 当前时间步奖励置零
             reward = 0
-            throttle_control = 0.3
+            throttle_control = 0.15
             
             """
             # 动作解包，前视距离只有大于0时才是有效的
@@ -321,6 +321,9 @@ class CarEnv():
             dx, dy = obstacle_loaction - vehicle_location
             obstacle_angle = np.arctan2(dy, dx) - np.deg2rad(self.vehicle.get_transform().rotation.yaw)
             obstacle_angle = (obstacle_angle + np.pi) % (2 * np.pi) - np.pi
+            self.vehicle_y = self.vehicle.get_location().y
+            self.obstacle_y = self.static_obstacle.get_location().y
+        
 
             # 获取当前车辆航点信息，通过find_lookahead_waypoint函数找到目标预瞄点
             #self.current_waypoint = self.map.get_waypoint(self.location, project_to_road=True, lane_type=(carla.LaneType.Driving))
@@ -328,7 +331,7 @@ class CarEnv():
             v_transform = self.vehicle.get_transform()
             
 
-            #print(f"[DEBUG] mode: {'RL' if self.avoidance_mode else 'PID'}, obstacle_distance: {obstacle_distance:.2f}, action: {action}")
+            print(f"[DEBUG] mode: {'RL' if self.avoidance_mode else 'PID'}, obstacle_distance: {obstacle_distance:.2f}, action: {action}")
 
             if not self.avoidance_mode and obstacle_distance < self.obstacle_trigger_distance:
                 print("[切换] 避障模式激活！")
@@ -339,9 +342,19 @@ class CarEnv():
 
             if self.avoidance_mode:
                 # 使用 RL 控制器
-                throttle = float(action[0][0]) # 或 action[0] if flatten
-                steer = float(action[0][1])
-                self.vehicle.apply_control(carla.VehicleControl(throttle=throttle, steer=steer))
+                raw_throttle = float(action[0][0]) # 原始动作值，预期在 [-1, 1]
+                steer = float(action[0][1])  
+                max_throttle = 1.0
+                max_brake = 1.0  
+                control = carla.VehicleControl()
+                control.steer = steer
+                if raw_throttle >= 0:
+                    control.throttle = raw_throttle * max_throttle
+                    control.brake = 0.0
+                else:
+                    control.throttle = 0.0
+                    control.brake = -raw_throttle * max_brake
+                    self.vehicle.apply_control(control)
             else:
                 # 使用 PID 控制器
                 # 1. throttle 控制（可使用 PID 或固定值）
@@ -504,18 +517,23 @@ class CarEnv():
                 print("超时结束")
                 done = True
                 reward = -self.timesteps
-            elif self.current_waypoint_index >= len(self.route_waypoints)-3:
+            elif self.vehicle_y < self.obstacle_y - 8.0:
                 print("完成结束")
+                self.avoidance_mode = False
                 done = True
-                self.fresh_start = True
                 reward = 500
-                self.checkpoint_waypoint_index = 0
-                if self.checkpoint_frequency is not None:
-                    if self.checkpoint_frequency < self.total_distance//2:
-                        self.checkpoint_frequency += 2
-                    else:
-                        self.checkpoint_frequency = None
-                        self.checkpoint_waypoint_index = 0
+            # elif self.current_waypoint_index >= len(self.route_waypoints)-3:
+            #     print("完成结束")
+            #     done = True
+            #     self.fresh_start = True
+            #     reward = 500
+            #     self.checkpoint_waypoint_index = 0
+            #     if self.checkpoint_frequency is not None:
+            #         if self.checkpoint_frequency < self.total_distance//2:
+            #             self.checkpoint_frequency += 2
+            #         else:
+            #             self.checkpoint_frequency = None
+            #             self.checkpoint_waypoint_index = 0
             '''
             计算奖励
             Calculate the reward for each time step
@@ -650,7 +668,7 @@ class CarEnv():
             if marking.type == carla.LaneMarkingType.Solid:
                 self.lane_invasion_hist.append(event)
                 print("[警告] 实线越线")
-                break  # 一旦有实线就记录一次
+                break 
 
     #使用pygame监视
     def process_img(self, image, surface=None):
@@ -718,9 +736,12 @@ class CarEnv():
     def save_return_log(self, return_list, filename):
         with open(filename, 'w', newline='') as csvfile:
             writer = csv.writer(csvfile)
-            writer.writerow(['waypoint', 'curvature'])
+           # writer.writerow(['waypoint', 'curvature'])
+            writer.writerow(['episode', 'return'])
             for i, episode_return in enumerate(return_list):
                 writer.writerow([i+1, episode_return])
+
+    
 
 
     def check_vehicle_current_index(self, vehicle_location):

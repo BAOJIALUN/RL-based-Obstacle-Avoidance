@@ -5,7 +5,7 @@ SAVED_CHECKPOINT_DIR = 'checkpoints'
 # DDPG
 ACTOR_LR = 3e-4 # actor 学习率
 CRITIC_LR = 3e-3 # critic 学习率
-NUM_EPISODES = 100 # 训练总episode
+NUM_EPISODES = 5000 # 训练总episode
 HIDDEN_DIM = 128 # 隐藏层大小
 GAMMA = 0.99 # 折扣率
 TAU = 0.01  # 软更新参数

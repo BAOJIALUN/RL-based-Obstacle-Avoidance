@@ -126,7 +126,7 @@ def train_on_policy_agent(env, agent, num_episodes, args, queue=None):
         torch.save(agent.actor.state_dict(), os.path.join(save_dir, f"{args['save']}_{num_episodes}_actor.pt"))
         torch.save(agent.critic.state_dict(), os.path.join(save_dir, f"{args['save']}_{best_episode}_critic.pt"))
 
-    save_return_log(return_list)
+    save_return_log(return_list, os.path.join(save_dir, f"{args['save']}_{num_episodes}_return_log.csv"))
 
     if queue is not None:
         queue.put({"return_list": return_list})
