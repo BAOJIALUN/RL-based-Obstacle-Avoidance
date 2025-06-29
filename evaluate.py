@@ -136,7 +136,7 @@ def evaluate_agent(env, actor, plot=False, save=False):
             lat_jerk.append(info["lat_jerk"])
             vpath.append(info["vehicle_location"])
             # ave_devi.append(info[8])
-            lkd.append(info["lookahead"])
+            #lkd.append(info["lookahead"])
             accel.append(info["lat_accel"])
             rotation_v.append(info["v_yaw"])
         total_deviation.append(np.mean(dist_from_center))

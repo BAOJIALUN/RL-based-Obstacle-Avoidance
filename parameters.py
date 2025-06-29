@@ -5,7 +5,7 @@ SAVED_CHECKPOINT_DIR = 'checkpoints'
 # DDPG
 ACTOR_LR = 3e-4 # actor 学习率
 CRITIC_LR = 3e-3 # critic 学习率
-NUM_EPISODES = 5000 # 训练总episode
+NUM_EPISODES = 350 # 训练总episode
 HIDDEN_DIM = 128 # 隐藏层大小
 GAMMA = 0.99 # 折扣率
 TAU = 0.01  # 软更新参数
@@ -29,9 +29,9 @@ IM_WIDTH = 640
 IM_HEIGHT = 480
 MAX_DISTANCE_FROM_CENTER = 3
 STATE_DIM = 6
-ACTION_DIM = 2
+ACTION_DIM = 1
 TOWN = 'Town05'
-PATHFILE = 'town5_waypoints'
+PATHFILE = 'town5_waypoints2'
 # TOWN = 'Town03'
 # PATHFILE = 'town3_long2_r0d2'
 

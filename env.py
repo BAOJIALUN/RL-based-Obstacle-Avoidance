@@ -54,7 +54,7 @@ class CarEnv():
     '''
     STEER_AMT = 0.3 # 转向最大值
     def __init__(self, checkpoint_frequency=100, sync=False, continuous_action_space=True, render=True, train=True, 
-                 town='Town05', pathfile='town5_waypoints', pid=None, pp=False, determined_speed=None):
+                 town='Town05', pathfile='town5_waypoints2', pid=None, pp=False, determined_speed=None):
         self.client = carla.Client(HOST, PORT)
         self.client.set_timeout(5.0)
         self.client.load_world(town)
@@ -139,7 +139,7 @@ class CarEnv():
 
             #生成静态障碍物
             obstacle_transform = carla.Transform(
-            carla.Location(x=31.5, y=145.5, z=0.1),
+            carla.Location(x=31.5, y=113.5, z=0.1),
             carla.Rotation(yaw=270)
             )
             obstacle_bp = self.blueprint_library.filter("vehicle.tesla.model3")[0]
@@ -208,6 +208,8 @@ class CarEnv():
             
 
             self.last_y = self.vehicle.get_location().y
+
+
 
  
             
@@ -295,6 +297,8 @@ class CarEnv():
             # 当前时间步奖励置零
             reward = 0
             throttle_control = 0.15
+            collision = 0
+            lane = 0
             
             """
             # 动作解包，前视距离只有大于0时才是有效的
@@ -342,19 +346,28 @@ class CarEnv():
 
             if self.avoidance_mode:
                 # 使用 RL 控制器
-                raw_throttle = float(action[0][0]) # 原始动作值，预期在 [-1, 1]
-                steer = float(action[0][1])  
-                max_throttle = 1.0
-                max_brake = 1.0  
+                # raw_throttle = float(action[0][0]) # 原始动作值，预期在 [-1, 1]
+                # steer = float(action[0][1])  
+                # max_throttle = 1.0
+                # max_brake = 1.0  
+                # control = carla.VehicleControl()
+                # control.steer = steer
+                # if raw_throttle >= 0:
+                #     control.throttle = raw_throttle * max_throttle
+                #     control.brake = 0.0
+                # else:
+                #     control.throttle = 0.0
+                #     control.brake = -raw_throttle * max_brake
+                #     self.vehicle.apply_control(control)
+                
+                steer = float(action[0][0]) # 现在动作只包含 steer，一个维度
+                fixed_throttle = 0.3     # 固定 throttle 值
                 control = carla.VehicleControl()
                 control.steer = steer
-                if raw_throttle >= 0:
-                    control.throttle = raw_throttle * max_throttle
-                    control.brake = 0.0
-                else:
-                    control.throttle = 0.0
-                    control.brake = -raw_throttle * max_brake
-                    self.vehicle.apply_control(control)
+                control.throttle = fixed_throttle
+                control.brake = 0.0
+                self.vehicle.apply_control(control)
+
             else:
                 # 使用 PID 控制器
                 # 1. throttle 控制（可使用 PID 或固定值）
@@ -452,7 +465,7 @@ class CarEnv():
 
             #纵向移动距离
             current_y = self.vehicle.get_location().y
-            traveled = current_y - self.last_y
+            traveled = abs(current_y - self.last_y)
             self.last_y = current_y  # 更新
 
 
@@ -494,11 +507,11 @@ class CarEnv():
             if len(self.collision_hist) !=0:
                 print("碰撞结束")
                 done = True
-                reward = -100
+                reward = -500
             elif len(self.lane_invasion_hist) != 0:
                 print("压线结束")
                 done = True
-                reward = -100
+                reward = -500
             # elif self.distance_from_center > self.max_distance_from_center:
             #     print("偏离结束", self.distance_from_center)
             #     done = True
@@ -513,7 +526,7 @@ class CarEnv():
                 reward = -500
             
            
-            if self.timesteps >= 5000 and self.train:
+            elif self.timesteps >= 5000 and self.train:
                 print("超时结束")
                 done = True
                 reward = -self.timesteps
@@ -522,6 +535,9 @@ class CarEnv():
                 self.avoidance_mode = False
                 done = True
                 reward = 500
+            
+
+
             # elif self.current_waypoint_index >= len(self.route_waypoints)-3:
             #     print("完成结束")
             #     done = True
@@ -540,12 +556,15 @@ class CarEnv():
             '''
             if not done:
                 # reward = self.curvature_reward2(accel=acceleration)
-                reward = self.obstacle_reward(cos_yaw_diff, dist, traveled,long_jerk, lat_jerk, lat_acc)
+                reward = self.obstacle_reward(cos_yaw_diff, dist, collision, lane, traveled,long_jerk, lat_jerk, lat_acc)
                 if throttle_control < 0:
                     reward += throttle_control
                 # reward = self.original_reward()
                 # reward = self.conventional_reward(accel=lat_acc)
                 # reward = self.case_conventional_reward(accel=lat_acc)
+            else:
+                pass
+
 
             
             # 速度，偏离，角度标准化
@@ -664,10 +683,16 @@ class CarEnv():
     
 
     def _record_lane_invasion(self, event):
+        violation_types = {
+            carla.LaneMarkingType.Solid,
+            carla.LaneMarkingType.SolidSolid,
+            carla.LaneMarkingType.SolidBroken,
+            carla.LaneMarkingType.BrokenSolid
+        }
         for marking in event.crossed_lane_markings:
-            if marking.type == carla.LaneMarkingType.Solid:
+            if marking.type in violation_types:
                 self.lane_invasion_hist.append(event)
-                print("[警告] 实线越线")
+                print("[警告] 越线")
                 break 
 
     #使用pygame监视
@@ -785,18 +810,19 @@ class CarEnv():
         return reward
     
     
-    def obstacle_reward(self, cos_yaw_diff, dist, traveled, jerk_long, jerk_lat, lat_acc,
-                     lambda_1=1.0, lambda_2=1.0, lambda_5=0.5, lambda_jerk=0.05, lambda_acc=0.1):
+    def obstacle_reward(self, cos_yaw_diff, dist, collision, lane, traveled, jerk_long, jerk_lat, lat_acc,
+                     lambda_1=0.3, lambda_2=0.3, lambda_5=1.5, lambda_jerk=0.05, lambda_acc=0.1):
         """
         综合奖励函数（考虑轨迹对齐、距离、碰撞、车道线、行驶距离、jerk、横向加速度）
         """
         jerk_penalty = lambda_jerk * (abs(jerk_long) + abs(jerk_lat))
         acc_penalty = lambda_acc * abs(lat_acc)  
         reward = (lambda_1 * cos_yaw_diff) \
-            - (lambda_2 * dist) \
             + (lambda_5 * traveled) \
             - jerk_penalty \
             - acc_penalty  
+        #- (lambda_2 * dist) \
+    
         
         return reward
     

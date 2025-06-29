@@ -50,7 +50,8 @@ class PPOPolicyNetContinuous(torch.nn.Module):
 
     def forward(self, x):
         x = F.relu(self.fc1(x))
-        mu = 2.0 * torch.tanh(self.fc_mu(x))
+        #mu = 2.0 * torch.tanh(self.fc_mu(x))
+        mu =  torch.tanh(self.fc_mu(x))
         std = F.softplus(self.fc_std(x))
         return mu, std
 
@@ -100,7 +101,8 @@ class PPOContinuous:
         states = torch.tensor(transition_dict['states'],
                               dtype=torch.float).to(self.device)
         actions = torch.tensor(transition_dict['actions'],
-                               dtype=torch.float).view(-1, 2).to(self.device)
+                               #dtype=torch.float).view(-1, 2).to(self.device)
+                               dtype=torch.float).view(-1, 1).to(self.device)
         rewards = torch.tensor(transition_dict['rewards'],
                                dtype=torch.float).view(-1, 1).to(self.device)
         next_states = torch.tensor(transition_dict['next_states'],
