@@ -104,7 +104,8 @@ def plot_path(path1, path2, filename=None):
         plt.savefig('image/'+filename)
     plt.show()
 
-def evaluate_agent(env, actor, plot=False, save=False):
+def evaluate_agent(env, pp_actor,obs_actor, plot=False, save=False):
+    current_mode = "pp"
     total_deviation = list()
     total_speed = list()
     total_latacc = list()
@@ -125,9 +126,27 @@ def evaluate_agent(env, actor, plot=False, save=False):
  
         while not done:
             with torch.no_grad():
-                state_tensor = torch.tensor([state], dtype=torch.float).to(device)
-                action, log_prob = actor(state_tensor)
+                pp_state = state[2:]
+                obs_state = state [:6]
+                ##state_tensor = torch.tensor([state], dtype=torch.float).to(device)
+                pp_state_tensor = torch.tensor(np.array([pp_state]), dtype=torch.float32).unsqueeze(0).to(device)
+                obs_state_tensor = torch.tensor(np.array([obs_state]), dtype=torch.float32).unsqueeze(0).to(device)
+                #if env.avoidance_mode:
+                mode = "obs" if env.avoidance_mode else "pp"    # 如果当前模式与上次不同，跳过该帧预测，防止模型不匹配
+                if mode != current_mode:
+                    print(f"[切换] 模式从 {current_mode} -> {mode}，跳过本帧避免模型不一致")
+                    current_mode = mode
+                    # 用 dummy action 执行一步，保持环境进展
+                    _, _, done, info = env.step(np.zeros((1,))) # 注意这里改成 dummy
+                    continue
+                if current_mode == "obs":
+                    action, log_prob = obs_actor(obs_state_tensor)
+                    print(f"[INFO] 当前模式：{'RL-避障' if env.avoidance_mode else 'PP-路径跟踪'}，action = {action}")
+                else:
+                    action, log_prob = pp_actor(pp_state_tensor)
+                    print(f"[INFO] 当前模式：{'RL-避障' if env.avoidance_mode else 'PP-路径跟踪'}，action = {action}")
             next_state, reward, done, info = env.step(action)
+            current_mode= info["mode"]
             total_reward += reward
             state = next_state
             # print(f"角速度:{info[6]}速度: {int(info[0])}, 前视距离:{info[2]}, 油门: {info[1]}, Ave_devi:{info[8]}, Devi:{info[9]}")
@@ -186,10 +205,17 @@ def evaluate_agent(env, actor, plot=False, save=False):
 try:
     # 存储权重的文件夹名称
     saved_weights_dir = SAVED_CHECKPOINT_DIR
-    checkpoint_file = args['checkpoint']
-    # 载入保存的权重
+    ##checkpoint_file = args['checkpoint']
+    # 解析两个 checkpoint 路径
+    pp_checkpoint_file = args['checkpoint'] + "_pp"
+    obstacle_checkpoint_file = args['checkpoint'] + "_obs"
 
-    actor_dict = torch.load(os.path.join(saved_weights_dir, f'{checkpoint_file}_actor.pt'))
+    # 加载模型权重
+    pp_actor_dict = torch.load(os.path.join(saved_weights_dir, f'{pp_checkpoint_file}.pt'))
+    obstacle_actor_dict = torch.load(os.path.join(saved_weights_dir, f'{obstacle_checkpoint_file}.pt'))
+    
+    # 载入保存的权重
+    #actor_dict = torch.load(os.path.join(saved_weights_dir, f'{checkpoint_file}_actor.pt'))
 
     # 创建环境和agent
     env = CarEnv(sync=True, train=False, town=TOWN, pathfile=PATHFILE)
@@ -197,26 +223,42 @@ try:
     # 动作空间和状态空间由环境决定
     state_dim = STATE_DIM
     action_dim = ACTION_DIM
+    pp_action_dim = PP_ACTION_DIM
+    pp_state_dim = 5
+    obs_state_dim = 6
 
     # 隐藏层数量
     hidden_dim = HIDDEN_DIM
 
+
+
     # 设备信息
     device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
 
-    # 创建Agent并载入权重
-    if 'ppo' in args['checkpoint']:
-        actor = PPOPolicyNetContinuous(state_dim, hidden_dim, action_dim).to(device)
-    else:
-        actor = PolicyNetContinuous(state_dim, hidden_dim, action_dim, 1).to(device)
-    actor.load_state_dict(actor_dict)
-    # 测试模式 evaluate mode，神经网络将不会执行诸如Dropout之类的操作，而只进行inference
-    actor.eval()
+    # # 创建Agent并载入权重
+    # if 'ppo' in args['checkpoint']:
+    #     actor = PPOPolicyNetContinuous(state_dim, hidden_dim, action_dim).to(device)
+    # else:
+    #     actor = PolicyNetContinuous(state_dim, hidden_dim, action_dim, 1).to(device)
+    # actor.load_state_dict(actor_dict)
+    # # 测试模式 evaluate mode，神经网络将不会执行诸如Dropout之类的操作，而只进行inference
+    # actor.eval()
+
+    # 创建模型结构
+    pp_actor = PolicyNetContinuous(pp_state_dim, hidden_dim, pp_action_dim, 1).to(device)
+    obstacle_actor = PolicyNetContinuous(obs_state_dim, hidden_dim, action_dim, 1).to(device)
+    # 加载权重
+    pp_actor.load_state_dict(pp_actor_dict)
+    obstacle_actor.load_state_dict(obstacle_actor_dict)
+    # 设置为评估模式
+    pp_actor.eval()
+    obstacle_actor.eval()
 
 
 
     # Evaluate the performance of the agent using the loaded Q-network
-    average_reward, average_deviation, average_speed, average_latacc = evaluate_agent(env, actor)
-    print(f"ckpt:{checkpoint_file}\nAverage reward:{average_reward}\nAverage_deviation:{average_deviation}\nAverage_speed:{average_speed}\nAverage_latacc:{average_latacc}")
+    average_reward, average_deviation, average_speed, average_latacc = evaluate_agent(env, pp_actor, obstacle_actor)
+    print(f"[pp_model]\nAverage reward:{average_reward}\nAverage_deviation:{average_deviation}\nAverage_speed:{average_speed}\nAverage_latacc:{average_latacc}")
+    print(f"[Obstacle_model]\nAverage reward:{average_reward}\nAverage_deviation:{average_deviation}\nAverage_speed:{average_speed}\nAverage_latacc:{average_latacc}")
 finally:
     env.destroy_env()

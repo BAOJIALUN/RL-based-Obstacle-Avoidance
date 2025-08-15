@@ -201,13 +201,17 @@ class CarEnv():
             self.max_acceleration = 4.0 #[version5-1] 最大加速度限制
             self.max_jerk = 2 #[version6] 最大jerk限制
             # initializion  of obstacle information
-            self.distance_to_obstacle = 100.0
+            self.distance_to_obstacle = 20.0
             self.angle_to_obstacle = 0.0
             #avoidance_mode
             self.avoidance_mode = False
-            
+            self.avoidance_step_counter = 0
+            self.min_avoidance_steps = 200
+            self.avoidance_cooldown = 0
 
             self.last_y = self.vehicle.get_location().y
+
+            self.prev_steer = 0.0
 
 
 
@@ -258,6 +262,7 @@ class CarEnv():
             #构建返回的状态信息
             acceleration = math.sqrt(self.acceleration.x**2 + self.acceleration.y**2 + self.acceleration.z**2)
             #state for obstacle avoidance training
+            #self.state = np.array([self.distance_to_obstacle, self.angle_to_obstacle,acceleration, self.kmh, self.distance_from_center, self.angle,self.mean_curvature])
             self.state = np.array([self.distance_to_obstacle, self.angle_to_obstacle,acceleration, self.kmh, self.distance_from_center, self.angle])
             #state for pp training
             #self.state = np.array([self.mean_curvature, acceleration, self.kmh, self.distance_from_center, self.angle]) 
@@ -297,6 +302,8 @@ class CarEnv():
             # 当前时间步奖励置零
             reward = 0
             throttle_control = 0.15
+            step_reward = 0
+            terminal_bonus = 0
             collision = 0
             lane = 0
             
@@ -330,26 +337,35 @@ class CarEnv():
         
 
             # 获取当前车辆航点信息，通过find_lookahead_waypoint函数找到目标预瞄点
-            #self.current_waypoint = self.map.get_waypoint(self.location, project_to_road=True, lane_type=(carla.LaneType.Driving))
-            #self.target_waypoint = find_lookahead_waypoint(vehicle_location,self.current_waypoint_index, lookahead, self.route_waypoints)
+            # self.current_waypoint = self.map.get_waypoint(self.location, project_to_road=True, lane_type=(carla.LaneType.Driving))
+            # self.target_waypoint = find_lookahead_waypoint(vehicle_location,self.current_waypoint_index, lookahead, self.route_waypoints)
             v_transform = self.vehicle.get_transform()
             
-
-            print(f"[DEBUG] mode: {'RL' if self.avoidance_mode else 'PID'}, obstacle_distance: {obstacle_distance:.2f}, action: {action}")
-
-            if not self.avoidance_mode and obstacle_distance < self.obstacle_trigger_distance:
+            # 更新 cooldown 计时器（放最上面）
+            if self.avoidance_cooldown > 0:
+                self.avoidance_cooldown -= 1# 判断是否应进入避障模式
+            if (
+                not self.avoidance_mode
+                and obstacle_distance < self.obstacle_trigger_distance
+                and self.avoidance_cooldown == 0
+            ):
                 print("[切换] 避障模式激活！")
                 self.avoidance_mode = True
-            # elif self.avoidance_mode and obstacle_distance > self.obstacle_safe_distance:
-            #     print("[切换] 恢复路径跟踪模式！")
-            #     self.avoidance_mode = False
+                self.avoidance_step_counter = 0
+            elif self.avoidance_mode:
+                self.avoidance_step_counter += 1
+                if obstacle_distance > self.obstacle_safe_distance and self.avoidance_step_counter > self.min_avoidance_steps:
+                    print("[切换] 恢复路径跟踪模式！")
+                    self.avoidance_mode = False
+                    self.avoidance_cooldown = 30
 
+            
             if self.avoidance_mode:
                 # 使用 RL 控制器
                 # raw_throttle = float(action[0][0]) # 原始动作值，预期在 [-1, 1]
-                # steer = float(action[0][1])  
+                # steer = float(action[0][1])
                 # max_throttle = 1.0
-                # max_brake = 1.0  
+                # max_brake = 1.0
                 # control = carla.VehicleControl()
                 # control.steer = steer
                 # if raw_throttle >= 0:
@@ -358,57 +374,55 @@ class CarEnv():
                 # else:
                 #     control.throttle = 0.0
                 #     control.brake = -raw_throttle * max_brake
-                #     self.vehicle.apply_control(control)
-                
-                steer = float(action[0][0]) # 现在动作只包含 steer，一个维度
-                fixed_throttle = 0.3     # 固定 throttle 值
+                #     self.vehicle.apply_control(control) 
+                  
+                steer = float(action[0][0])# 现在动作只包含 steer，一个维度
+                throttle = float(action[0][1])
                 control = carla.VehicleControl()
                 control.steer = steer
-                control.throttle = fixed_throttle
+                control.throttle = throttle
                 control.brake = 0.0
                 self.vehicle.apply_control(control)
 
             else:
-                # 使用 PID 控制器
-                # 1. throttle 控制（可使用 PID 或固定值）
-                speed_value = self.kmh # 当前速度 km/h（需自行转换为 m/s）
-                throttle_control = self.determined_speed.update(round(speed_value, 2))  
-                # 2. steer 控制（基于横向误差）
-                throttle = self.determined_speed.update(round(speed_value, 2))
-                deviation = self.distance_from_center * self.check_deviation_left_right(vehicle_location)
-                steer = self.pid_controller.update(round(deviation, 2))  
-                # 3. 应用控制
-                self.vehicle.apply_control(carla.VehicleControl(throttle=throttle, steer=steer))
-
-            
-            """
-            # 使用pid控制器
-            if self.pid_controller:
-                throttle_control = (self.throttle*0.8 + throttle*0.2)
-                value = self.distance_from_center * self.check_deviation_left_right(vehicle_location)
-                steer_pid = self.pid_controller.update(round(value, 2))
-                self.vehicle.apply_control(carla.VehicleControl(throttle=throttle_control, steer=steer_pid))
-            # 使用PP作为控制器
-            elif self.pp:
+                # 动作解包，前视距离只有大于0时才是有效的
+                # print("动作内容：", action)
+                action_1 = action[0][0][0]
+                action_2 = action[0][0][1]
                 lookahead = action_1
-                speed_value = self.kmh
-                throttle_control = self.determined_speed.update(round(speed_value,2))
+                lookahead = float((lookahead+1.0)/2)
+                lookahead = 1 + min(max(lookahead, 0), 1.0) * 6
+                # lookahead = min(max(lookahead, 0), 1.0) * 7
+                # lookahead = float(1.5 + 1.5*lookahead)
+                throttle = float(action_2)
+                self.current_waypoint = self.map.get_waypoint(self.location, project_to_road=True, lane_type=(carla.LaneType.Driving))
                 self.target_waypoint = find_lookahead_waypoint(vehicle_location,self.current_waypoint_index, lookahead, self.route_waypoints)
-                steer = self.pure_pursuit(self.target_waypoint, v_transform)
-                if throttle_control >= 0:
-                    self.vehicle.apply_control(carla.VehicleControl(throttle=throttle_control, steer=steer))
+            # 使用pid控制器
+                if self.pid_controller:
+                    throttle_control = (self.throttle*0.8 + throttle*0.2)
+                    value = self.distance_from_center * self.check_deviation_left_right(vehicle_location)
+                    steer_pid = self.pid_controller.update(round(value, 2))
+                    self.vehicle.apply_control(carla.VehicleControl(throttle=throttle_control, steer=steer_pid))
+                # 使用PP作为控制器
+                elif self.pp:
+                    lookahead = action_1
+                    speed_value = self.kmh
+                    throttle_control = self.determined_speed.update(round(speed_value,2))
+                    self.target_waypoint = find_lookahead_waypoint(vehicle_location,self.current_waypoint_index, lookahead, self.route_waypoints)
+                    steer = self.pure_pursuit(self.target_waypoint, v_transform)
+                    if throttle_control >= 0:
+                        self.vehicle.apply_control(carla.VehicleControl(throttle=throttle_control, steer=steer))
+                    else:
+                        self.vehicle.apply_control(carla.VehicleControl(steer=steer, brake=-throttle_control))
+                # rl-based混合控制器
                 else:
-                    self.vehicle.apply_control(carla.VehicleControl(steer=steer, brake=-throttle_control))
-            # rl-based混合控制器
-            else:
-                steer = self.pure_pursuit(self.target_waypoint, v_transform)
-                throttle_control = (self.throttle*0.8 + throttle*0.2)
-                if throttle_control >= 0:
-                    self.vehicle.apply_control(carla.VehicleControl(throttle=throttle_control, steer=steer))
-                else:
-                    self.vehicle.apply_control(carla.VehicleControl(steer=steer, brake=-throttle_control))
+                    steer = self.pure_pursuit(self.target_waypoint, v_transform)
+                    throttle_control = (self.throttle*0.8 + throttle*0.2)
+                    if throttle_control >= 0:
+                        self.vehicle.apply_control(carla.VehicleControl(throttle=throttle_control, steer=steer))
+                    else:
+                        self.vehicle.apply_control(carla.VehicleControl(steer=steer, brake=-throttle_control))
 
-            """
             
             # 保存上一帧油门信息
             self.throttle = throttle_control
@@ -504,103 +518,88 @@ class CarEnv():
             done = False
             
 
-            if len(self.collision_hist) !=0:
+            steer_cmd = control.steer if 'control' in locals() else 0.0
+            heading_err = (vh_yaw - wp_yaw) * np.pi / 180.0
+            step_reward = self.obstacle_reward(
+                distance_from_center=self.distance_from_center,   # m
+                heading_err=heading_err,                          # rad
+                speed_kmh=self.kmh, target_kmh=self.target_kmh,
+                steer=steer_cmd, steer_prev=getattr(self, "prev_steer", 0.0),
+                jerk_long=long_jerk, jerk_lat=lat_jerk,
+                lat_acc=lat_acc,
+                obstacle_distance=obstacle_distance,
+                dist_wp=dist
+            )# 轻微惩罚刹车
+            if throttle_control < 0:
+                step_reward += 0.1 * throttle_control
+            terminal_bonus = 0.0
+            done = False
+            if len(self.collision_hist) != 0:
                 print("碰撞结束")
-                done = True
-                reward = -500
+                done = True; terminal_bonus = -100
             elif len(self.lane_invasion_hist) != 0:
                 print("压线结束")
-                done = True
-                reward = -500
-            # elif self.distance_from_center > self.max_distance_from_center:
-            #     print("偏离结束", self.distance_from_center)
-            #     done = True
-            #     reward = -500
+                done = True; terminal_bonus = -100
             elif self.episode_start_time + 10 < time.time() and self.kmh < 3:
                 print("低速结束", self.kmh)
-                done = True
-                reward = -500
+                done = True; terminal_bonus = -100
             elif self.kmh > self.max_kmh:
                 print("超速结束", self.kmh)
-                done = True
-                reward = -500
-            
-           
+                done = True; terminal_bonus = -100
             elif self.timesteps >= 5000 and self.train:
                 print("超时结束")
-                done = True
-                reward = -self.timesteps
-            elif self.vehicle_y < self.obstacle_y - 8.0:
+                done = True; terminal_bonus = -50  
+            elif (self.vehicle_y < self.obstacle_y - 8.0
+                and self.avoidance_step_counter > self.min_avoidance_steps):
                 print("完成结束")
                 self.avoidance_mode = False
-                done = True
-                reward = 500
-            
+                done = True; terminal_bonus = +100
+            reward = float(np.clip(step_reward + terminal_bonus, -200.0, 200.0))
+            self.prev_steer = steer_cmd
 
+           
+            #归一化状态
+            obstacle_distance = np.clip(obstacle_distance, 0.0, 50.0) / 50.0
+            obstacle_angle = np.clip(obstacle_angle, -np.pi, np.pi) / np.pi
+            normalized_accel = np.clip(acceleration, -3.0, 3.0) / 3.0
+            normalized_kmh = np.clip(self.kmh, 0.0, 100.0) / 100.0
+            normalized_distance_from_center = np.clip(
+                self.distance_from_center,
+                -self.max_distance_from_center,
+                self.max_distance_from_center
+                ) / self.max_distance_from_center
+            normalized_angle = np.clip(self.angle, -np.deg2rad(20), np.deg2rad(20)) / np.deg2rad(20)
+            self.state = np.array([
+                obstacle_distance,
+                obstacle_angle,
+                normalized_accel,
+                normalized_kmh,
+                normalized_distance_from_center,
+                normalized_angle
+            ])
 
-            # elif self.current_waypoint_index >= len(self.route_waypoints)-3:
-            #     print("完成结束")
-            #     done = True
-            #     self.fresh_start = True
-            #     reward = 500
-            #     self.checkpoint_waypoint_index = 0
-            #     if self.checkpoint_frequency is not None:
-            #         if self.checkpoint_frequency < self.total_distance//2:
-            #             self.checkpoint_frequency += 2
-            #         else:
-            #             self.checkpoint_frequency = None
-            #             self.checkpoint_waypoint_index = 0
-            '''
-            计算奖励
-            Calculate the reward for each time step
-            '''
-            if not done:
-                # reward = self.curvature_reward2(accel=acceleration)
-                reward = self.obstacle_reward(cos_yaw_diff, dist, collision, lane, traveled,long_jerk, lat_jerk, lat_acc)
-                if throttle_control < 0:
-                    reward += throttle_control
-                # reward = self.original_reward()
-                # reward = self.conventional_reward(accel=lat_acc)
-                # reward = self.case_conventional_reward(accel=lat_acc)
-            else:
-                pass
-
-
-            
-            # 速度，偏离，角度标准化
-            normalized_kmh = self.kmh / self.target_kmh
-            normalized_distance_from_center = self.distance_from_center / self.max_distance_from_center
-            normalized_angle = self.angle / np.deg2rad(20)
-            normalized_accel = acceleration / self.max_acceleration
-            #state for obstacle avoidance training
-            self.state = np.array([obstacle_distance, obstacle_angle,normalized_accel, normalized_kmh, normalized_distance_from_center, normalized_angle])
-            #state for pp training
-            # self.state = np.array([mean_curvature, normalized_accel, normalized_kmh, normalized_distance_from_center, normalized_angle])
-            self.center_lane_deviation = self.center_lane_deviation / self.timesteps
-
-            # 调试信息
             self.info = {
-                "reward":reward,
-                "speed":self.kmh, 
-                "throttle":throttle_control, 
-                #"lookahead":lookahead, 
-                "timesteps":self.timesteps, 
-                "v_yaw":yaw_velocity, 
-                "lat_jerk":lat_jerk, 
-                "path_covered":self.current_waypoint_index/len(self.route_waypoints), 
-                "ave_deviation":self.center_lane_deviation, 
-                "cur_deviation":self.distance_from_center, 
-                "lat_accel":lat_acc, 
-                "vehicle_location":self._vpath,
-                "deviation":self.distance_from_center
+                "reward": reward,
+                "speed": self.kmh,
+                "throttle": throttle_control,
+                "timesteps": self.timesteps,
+                "v_yaw": yaw_velocity,
+                "lat_jerk": lat_jerk,
+                "path_covered": self.current_waypoint_index/len(self.route_waypoints),
+                "ave_deviation": self.center_lane_deviation,
+                "cur_deviation": self.distance_from_center,
+                "lat_accel": lat_acc,
+                "vehicle_location": self._vpath,
+                "deviation": self.distance_from_center,
+                "mode": "obs" if self.avoidance_mode else "pp"
             }
+
             if done:
-    
                 for actor in self.actor_list:
                     actor.destroy()
                 self.actor_list = None
-
             return self.state, reward, done, self.info
+
 
         # 以下代码由于调试暂不使用
         # except:
@@ -810,21 +809,77 @@ class CarEnv():
         return reward
     
     
-    def obstacle_reward(self, cos_yaw_diff, dist, collision, lane, traveled, jerk_long, jerk_lat, lat_acc,
-                     lambda_1=0.3, lambda_2=0.3, lambda_5=1.5, lambda_jerk=0.05, lambda_acc=0.1):
-        """
-        综合奖励函数（考虑轨迹对齐、距离、碰撞、车道线、行驶距离、jerk、横向加速度）
-        """
-        jerk_penalty = lambda_jerk * (abs(jerk_long) + abs(jerk_lat))
-        acc_penalty = lambda_acc * abs(lat_acc)  
-        reward = (lambda_1 * cos_yaw_diff) \
-            + (lambda_5 * traveled) \
-            - jerk_penalty \
-            - acc_penalty  
-        #- (lambda_2 * dist) \
+    def obstacle_reward(
+        self,
+        *,
+        cos_yaw_diff,              # 与路径朝向对齐度 
+        dist_wp,                   # 与下个参考点距离
+        traveled,                  # 本步前进距离
+        jerk_long, jerk_lat,       # 加加速度
+        lat_acc,                   # 横向加速度
+        distance_from_center,      # 车道中心横向误差（
+        obstacle_distance,         # 障碍距离
+        collided, crossed_lane,    
+        v_mps=None,                # 实际速度（m/s）
+        steer=None,                # 当前舵角（-1~1）
+        steer_prev=None,           # 上一步舵角（-1~1）
+        target_v=8.33              # 30 km/h
+    ):
+
+        w_center = 2.0         
+        w_heading = 1.5         # 朝向对齐
+        w_speed = 1.8           # 目标车速
+        w_forward = 0.2         
+        w_steer = 0.30          # 大舵角惩罚
+        w_steer_rate = 0.25     # 抖方向惩罚（连贯性）
+        w_comfort = 0.03        # jerk/横向加速度轻惩罚
+        w_lane = 0.3            # 压线小惩罚（非终止时）
+        w_obs = 0.05            # 离障碍远一点的小奖励（可选）    
+        # 居中奖励
+        center_term = np.exp(- (distance_from_center / 0.5)**2)  
+        r_center = w_center * center_term    
+        #  朝向对齐
+        r_heading = w_heading * cos_yaw_diff    
+        # 目标车速
+        r_speed = 0.0
+        if v_mps is not None:
+            sigma = 2.0 
+            r_speed = w_speed * np.exp(- ((v_mps - target_v) ** 2) / (2 * sigma**2))    
+            # ====== 向前进奖励（ ======
+        r_forward = w_forward * max(traveled, 0.0)    
+        # ====== 转向成本======
+        r_steer = 0.0
+        if steer is not None:
+            r_steer -= w_steer * (steer ** 2)    
+            # ====== 舵角变化成本======
+        r_steer_rate = 0.0
+        if (steer is not None) and (steer_prev is not None):
+            r_steer_rate -= w_steer_rate * ((steer - steer_prev) ** 2)    
+            # ====== 舒适度轻惩罚======
+        r_comfort = - w_comfort * (abs(jerk_long) + abs(jerk_lat) + 0.5 * abs(lat_acc))    
+        # ====== 离障小奖励（======
+        r_obs = w_obs * (np.clip(obstacle_distance, 0.0, 50.0) / 50.0)    
+        # ====== 压线轻惩罚 ======
+        r_lane = - w_lane * float(crossed_lane)    
+        # 汇总
+        r_step = r_center + r_heading + r_speed + r_forward + r_steer + r_steer_rate + r_comfort + r_obs + r_lane
+        return float(np.clip(r_step, -5.0, 5.0))
+
+
+
+    # def obstacle_reward(self, cos_yaw_diff, dist, collision, lane, traveled, jerk_long, jerk_lat, lat_acc,
+    #                  lambda_1=0.3, lambda_2=0.3, lambda_5=1.5, lambda_jerk=0.05, lambda_acc=0.1):
+
+    #     jerk_penalty = lambda_jerk * (abs(jerk_long) + abs(jerk_lat))
+    #     acc_penalty = lambda_acc * abs(lat_acc)  
+    #     reward = (lambda_1 * cos_yaw_diff) \
+    #         + (lambda_5 * traveled) \
+    #         - jerk_penalty \
+    #         - acc_penalty  
+    #     #- (lambda_2 * dist) \
     
         
-        return reward
+    #     return reward
     
     def curvature_reward(self, accel):
         centering_factor = max((1.0 - self.distance_from_center / self.max_distance_from_center), 0.0)
